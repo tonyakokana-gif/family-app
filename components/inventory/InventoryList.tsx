@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { ShoppingCart, Check, Plus } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { ShoppingCart, Check, Plus, Pencil, Trash2, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import type { InventoryItem, StockLevel } from '@/types'
 
@@ -21,9 +21,14 @@ export default function InventoryList() {
   const [items, setItems] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set())
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
+  const [addingCategory, setAddingCategory] = useState<string | null>(null)
+  const [newItemName, setNewItemName] = useState('')
+  const editInputRef = useRef<HTMLInputElement>(null)
+  const addInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    // 初回フェッチ
     supabase
       .from('inventory_items')
       .select('*')
@@ -33,7 +38,6 @@ export default function InventoryList() {
         setLoading(false)
       })
 
-    // リアルタイム購読
     const channel = supabase
       .channel('inventory-changes')
       .on(
@@ -65,6 +69,14 @@ export default function InventoryList() {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
+  useEffect(() => {
+    if (editingId && editInputRef.current) editInputRef.current.focus()
+  }, [editingId])
+
+  useEffect(() => {
+    if (addingCategory && addInputRef.current) addInputRef.current.focus()
+  }, [addingCategory])
+
   const autoAddToShopping = async (item: InventoryItem) => {
     if (addedIds.has(item.id)) return
     const { error } = await supabase.from('shopping_list').insert({
@@ -90,14 +102,46 @@ export default function InventoryList() {
       .from('inventory_items')
       .update({ stock_level: next, updated_at: new Date().toISOString() })
       .eq('id', item.id)
-    // 残り少・なしになったら自動で買い物リストに追加
     if (next === 'low' || next === 'out') {
       await autoAddToShopping(item)
     }
   }
 
-  const addToShopping = async (item: InventoryItem) => {
-    await autoAddToShopping(item)
+  const startEdit = (item: InventoryItem) => {
+    setEditingId(item.id)
+    setEditingName(item.name)
+  }
+
+  const saveEdit = async (item: InventoryItem) => {
+    const name = editingName.trim()
+    if (!name || name === item.name) {
+      setEditingId(null)
+      return
+    }
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, name } : i))
+    setEditingId(null)
+    await supabase
+      .from('inventory_items')
+      .update({ name, updated_at: new Date().toISOString() })
+      .eq('id', item.id)
+  }
+
+  const deleteItem = async (item: InventoryItem) => {
+    if (!confirm(`「${item.name}」を削除しますか？`)) return
+    setItems(prev => prev.filter(i => i.id !== item.id))
+    await supabase.from('inventory_items').delete().eq('id', item.id)
+  }
+
+  const addItem = async (category: string) => {
+    const name = newItemName.trim()
+    if (!name) { setAddingCategory(null); return }
+    setAddingCategory(null)
+    setNewItemName('')
+    await supabase.from('inventory_items').insert({
+      name,
+      category,
+      stock_level: 'ok',
+    })
   }
 
   if (loading) {
@@ -108,23 +152,81 @@ export default function InventoryList() {
     )
   }
 
+  const renderItem = (item: InventoryItem, idx: number, total: number) => {
+    const stock = STOCK_CONFIG[item.stock_level]
+    const added = addedIds.has(item.id)
+    const isEditing = editingId === item.id
+
+    return (
+      <div
+        key={item.id}
+        className={`flex items-center px-4 py-3 gap-2 ${idx < total - 1 ? 'border-b border-gray-50' : ''}`}
+      >
+        {isEditing ? (
+          <input
+            ref={editInputRef}
+            value={editingName}
+            onChange={e => setEditingName(e.target.value)}
+            onBlur={() => saveEdit(item)}
+            onKeyDown={e => { if (e.key === 'Enter') saveEdit(item); if (e.key === 'Escape') setEditingId(null) }}
+            className="flex-1 text-sm font-medium text-gray-800 border-b border-indigo-400 outline-none bg-transparent"
+          />
+        ) : (
+          <span className="flex-1 text-sm font-medium text-gray-800">{item.name}</span>
+        )}
+
+        {/* 編集ボタン */}
+        <button
+          onClick={() => isEditing ? saveEdit(item) : startEdit(item)}
+          className="w-7 h-7 flex items-center justify-center rounded-full text-gray-300 active:scale-95"
+        >
+          {isEditing ? <Check size={14} className="text-indigo-500" /> : <Pencil size={13} />}
+        </button>
+
+        {/* 在庫バッジ */}
+        <button
+          onClick={() => cycleStock(item)}
+          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all active:scale-95 ${stock.className}`}
+        >
+          {stock.label}
+        </button>
+
+        {/* 買い物リストへ追加 */}
+        <button
+          onClick={() => autoAddToShopping(item)}
+          className={`w-9 h-9 flex items-center justify-center rounded-full transition-all active:scale-95 ${
+            added ? 'bg-emerald-500 text-white' : 'bg-indigo-50 text-indigo-600'
+          }`}
+        >
+          {added ? <Check size={15} /> : <ShoppingCart size={15} />}
+        </button>
+
+        {/* 削除ボタン */}
+        <button
+          onClick={() => deleteItem(item)}
+          className="w-7 h-7 flex items-center justify-center rounded-full text-gray-300 active:scale-95"
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div>
-      {/* ヘッダー */}
       <div
         className="bg-white px-4 pb-4 border-b border-gray-100"
         style={{ paddingTop: 'calc(env(safe-area-inset-top) + 16px)' }}
       >
         <h1 className="text-xl font-bold text-gray-900">在庫管理</h1>
         <p className="text-xs text-gray-400 mt-0.5">
-          バッジをタップ → 在庫更新（残り少・なしで自動的に買い物リストへ追加）
+          ✏️ 品名編集 ／ バッジで在庫更新（残り少・なしで買い物リストへ自動追加）
         </p>
       </div>
 
       <div className="px-4 py-4 space-y-6">
         {CATEGORIES.map(category => {
           const categoryItems = items.filter(i => i.category === category)
-          if (categoryItems.length === 0) return null
 
           return (
             <section key={category}>
@@ -132,98 +234,35 @@ export default function InventoryList() {
                 {category}
               </h2>
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                {categoryItems.map((item, idx) => {
-                  const stock = STOCK_CONFIG[item.stock_level]
-                  const added = addedIds.has(item.id)
+                {categoryItems.map((item, idx) => renderItem(item, idx, categoryItems.length))}
 
-                  return (
-                    <div
-                      key={item.id}
-                      className={`flex items-center px-4 py-3 gap-3 ${
-                        idx < categoryItems.length - 1 ? 'border-b border-gray-50' : ''
-                      }`}
-                    >
-                      <span className="flex-1 text-sm font-medium text-gray-800">
-                        {item.name}
-                      </span>
-
-                      {/* 在庫バッジ（タップで循環） */}
-                      <button
-                        onClick={() => cycleStock(item)}
-                        className={`px-3 py-1 rounded-full text-xs font-semibold transition-all active:scale-95 ${stock.className}`}
-                      >
-                        {stock.label}
-                      </button>
-
-                      {/* 買い物リストへ追加 */}
-                      <button
-                        onClick={() => addToShopping(item)}
-                        className={`w-9 h-9 flex items-center justify-center rounded-full transition-all active:scale-95 ${
-                          added
-                            ? 'bg-emerald-500 text-white'
-                            : 'bg-indigo-50 text-indigo-600'
-                        }`}
-                      >
-                        {added ? <Check size={15} /> : <ShoppingCart size={15} />}
-                      </button>
-                    </div>
-                  )
-                })}
+                {/* アイテム追加行 */}
+                {addingCategory === category ? (
+                  <div className="flex items-center px-4 py-3 gap-2 border-t border-gray-50">
+                    <input
+                      ref={addInputRef}
+                      value={newItemName}
+                      onChange={e => setNewItemName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') addItem(category); if (e.key === 'Escape') { setAddingCategory(null); setNewItemName('') } }}
+                      placeholder="品名を入力..."
+                      className="flex-1 text-sm text-gray-800 border-b border-indigo-400 outline-none bg-transparent"
+                    />
+                    <button onClick={() => addItem(category)} className="text-xs text-indigo-600 font-semibold">追加</button>
+                    <button onClick={() => { setAddingCategory(null); setNewItemName('') }} className="text-gray-300"><X size={14} /></button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setAddingCategory(category)}
+                    className="w-full flex items-center gap-2 px-4 py-3 text-xs text-gray-400 border-t border-gray-50 active:bg-gray-50"
+                  >
+                    <Plus size={14} />
+                    <span>アイテムを追加</span>
+                  </button>
+                )}
               </div>
             </section>
           )
         })}
-
-        {/* 未登録カテゴリのアイテムがあれば表示 */}
-        {(() => {
-          const otherItems = items.filter(i => !CATEGORIES.includes(i.category))
-          if (otherItems.length === 0) return null
-          return (
-            <section>
-              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 px-1">
-                その他
-              </h2>
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                {otherItems.map((item, idx) => {
-                  const stock = STOCK_CONFIG[item.stock_level]
-                  const added = addedIds.has(item.id)
-                  return (
-                    <div
-                      key={item.id}
-                      className={`flex items-center px-4 py-3 gap-3 ${
-                        idx < otherItems.length - 1 ? 'border-b border-gray-50' : ''
-                      }`}
-                    >
-                      <span className="flex-1 text-sm font-medium text-gray-800">{item.name}</span>
-                      <button
-                        onClick={() => cycleStock(item)}
-                        className={`px-3 py-1 rounded-full text-xs font-semibold active:scale-95 ${stock.className}`}
-                      >
-                        {stock.label}
-                      </button>
-                      <button
-                        onClick={() => addToShopping(item)}
-                        className={`w-9 h-9 flex items-center justify-center rounded-full active:scale-95 ${
-                          added ? 'bg-emerald-500 text-white' : 'bg-indigo-50 text-indigo-600'
-                        }`}
-                      >
-                        {added ? <Check size={15} /> : <ShoppingCart size={15} />}
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-          )
-        })()}
-
-        {items.length === 0 && (
-          <div className="text-center py-12 text-gray-300">
-            <Plus size={40} className="mx-auto mb-2 opacity-40" />
-            <p className="text-sm">アイテムがありません</p>
-            <p className="text-xs mt-1">SQLでシードデータを投入してください</p>
-          </div>
-        )}
       </div>
     </div>
   )
