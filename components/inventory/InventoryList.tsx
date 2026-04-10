@@ -65,20 +65,7 @@ export default function InventoryList() {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  const cycleStock = async (item: InventoryItem) => {
-    const next = NEXT_STOCK[item.stock_level]
-    // 楽観的更新
-    setItems(prev =>
-      prev.map(i => (i.id === item.id ? { ...i, stock_level: next } : i))
-    )
-    await supabase
-      .from('inventory_items')
-      .update({ stock_level: next, updated_at: new Date().toISOString() })
-      .eq('id', item.id)
-  }
-
-  const addToShopping = async (item: InventoryItem) => {
-    // 二重追加防止
+  const autoAddToShopping = async (item: InventoryItem) => {
     if (addedIds.has(item.id)) return
     const { error } = await supabase.from('shopping_list').insert({
       item_name: item.name,
@@ -86,17 +73,31 @@ export default function InventoryList() {
       is_purchased: false,
     })
     if (!error) {
-      setAddedIds(prev => new Set([...prev, item.id]))
+      setAddedIds(prev => { const s = new Set(prev); s.add(item.id); return s })
       setTimeout(
-        () =>
-          setAddedIds(prev => {
-            const next = new Set(prev)
-            next.delete(item.id)
-            return next
-          }),
+        () => setAddedIds(prev => { const s = new Set(prev); s.delete(item.id); return s }),
         2000
       )
     }
+  }
+
+  const cycleStock = async (item: InventoryItem) => {
+    const next = NEXT_STOCK[item.stock_level]
+    setItems(prev =>
+      prev.map(i => (i.id === item.id ? { ...i, stock_level: next } : i))
+    )
+    await supabase
+      .from('inventory_items')
+      .update({ stock_level: next, updated_at: new Date().toISOString() })
+      .eq('id', item.id)
+    // 残り少・なしになったら自動で買い物リストに追加
+    if (next === 'low' || next === 'out') {
+      await autoAddToShopping(item)
+    }
+  }
+
+  const addToShopping = async (item: InventoryItem) => {
+    await autoAddToShopping(item)
   }
 
   if (loading) {
@@ -116,7 +117,7 @@ export default function InventoryList() {
       >
         <h1 className="text-xl font-bold text-gray-900">在庫管理</h1>
         <p className="text-xs text-gray-400 mt-0.5">
-          バッジをタップ → 在庫を更新 ／ カートをタップ → 買い物リストに追加
+          バッジをタップ → 在庫更新（残り少・なしで自動的に買い物リストへ追加）
         </p>
       </div>
 
