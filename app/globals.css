@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  overscroll-behavior: none;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+textarea {
+  resize: none;
+}
+
+/* スクロールバー非表示（iOS Safari） */
+::-webkit-scrollbar {
+  display: none;
+}
